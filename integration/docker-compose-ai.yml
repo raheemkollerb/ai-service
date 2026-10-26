@@ -1,0 +1,24 @@
+  ai:
+    build:
+      context: ./apps/ai
+      dockerfile: Dockerfile
+    ports:
+      - "8100:8100"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - SERVICE_KEY=${SERVICE_KEY:-dev-service-key}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen3:30b-a3b}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-120}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
