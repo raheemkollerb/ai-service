@@ -225,7 +225,7 @@ mengarang angka, nama, atau referensi.
   - Request body (Pydantic): `messages: [{role, content}]` opsional `model: str | None`.
   - Whitelist model: jika request `model` ≠ settings `llm_model` → set `None` (pakai default).
   - Response: `StreamingResponse` `media_type="text/event-stream"` dengan header **`Cache-Control: no-cache`, `X-Accel-Buffering: no`** (anti-buffering nginx!). Error validasi → 400.
-- `GET /ai/health/upstream` → `200 {llm_base_url, model, available:true, models:[...]}`; runtime gagal → **503** berisi detail.
+- `GET /ai/health/upstream` → `200 {llm_base_url, model, available:true, models:[...]}`; runtime gagal → **503**, body tetap flat (`available:false`, `detail`) — bukan dibungkus `{"detail": {...}}` (porting 2026-11-04).
 - Bocor informasi: hanya metadata config, jangan pernah masukkan isi prompt.
 
 **`app/main.py`**
@@ -457,7 +457,9 @@ dead-upstream `:8102`): SEMUA 8 TES PASS.**
 Detail: T1 403/403; T2 400 detail "Tidak ada pesan yang valid..."; T3 system dibuang
 (tepat 1 system tersisa `build_context`, tidak ada leak payload user); T4 400; T5
 `text/event-stream` + delta×4 + `done{finish_reason:"stop",usage}`; T6 status 200
-(tanpa 5xx) bermuara frame `error`; T7 `{"status":"ok"}`; T8 `available:true` +
+(tanpa 5xx) bermuara frame `error`; T7 `{"status":"healthy", "service":"ai-gateway",
+...}` (porting 2026-11-04: implementasi platform menjadi acuan tunggal — body
+`/health` memuat service + timestamp); T8 `available:true` +
 daftar model. Catatan perbaikan saat tes: `ChatMessage.role` awalnya `Literal["user",
 "assistant"]` menolak `system` dengan 422 → diperluas ke `["user","assistant","system"]`
 (bermaka `validate_messages` yang membuang system sesuai spesimen § 7).

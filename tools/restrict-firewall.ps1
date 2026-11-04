@@ -1,12 +1,21 @@
 param(
-    [Parameter(Mandatory = $true)]
+    # IP server platform (BFF Express). Opsional pada mode -HpcGateway tahap 1
+    # (belum tahu IP platform): rule 8100 sementara terbuka untuk subnet LAN.
     [string]$PlatformIP,
 
-    [switch]$KeepLanSubnet
+    # Pertahankan subnet LAN selain IP platform (mode transisi).
+    [switch]$KeepLanSubnet,
+
+    # Mode B (gateway Docker di HPC): atur 2 port sekaligus -
+    #   11434 (Ollama)  -> dikunci ke subnet NAT Docker/WSL (tidak terlihat LAN)
+    #   8100  (gateway) -> buat/perketat rule "RCC AI Gateway (:8100)"
+    #                      ke IP platform + (opsional) subnet LAN.
+    [switch]$HpcGateway
 )
 
 $ErrorActionPreference = 'Stop'
-$ruleName = 'Ollama LLM (RCC AI Gateway)'
+$ollamaRuleName = 'Ollama LLM (RCC AI Gateway)'
+$gatewayRuleName = 'RCC AI Gateway (:8100)'
 $lanSubnet = '10.5.14.0/23'
 
 function Test-Administrator {
@@ -16,34 +25,102 @@ function Test-Administrator {
 
 if (-not (Test-Administrator)) {
     Write-Host 'Butuh hak admin - meminta elevasi (UAC)...'
-    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-PlatformIP', $PlatformIP)
+    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
+    if ($PlatformIP) { $args += @('-PlatformIP', $PlatformIP) }
     if ($KeepLanSubnet) { $args += '-KeepLanSubnet' }
+    if ($HpcGateway) { $args += '-HpcGateway' }
     Start-Process -FilePath 'powershell.exe' -ArgumentList $args -Verb RunAs -Wait
     exit 0
 }
 
-$remote = @($PlatformIP)
-if ($KeepLanSubnet) { $remote += $lanSubnet }
+# --- Subnet NAT Docker/WSL (untuk Mode B: kunci 11434) ---
+function Get-DockerNatSubnets {
+    $ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.InterfaceAlias -like '*WSL*' -or
+            $_.InterfaceAlias -like '*Docker*'
+        }
+    @($ips | ForEach-Object { "$($_.IPAddress)/$($_.PrefixLength)" } | Sort-Object -Unique)
+}
 
+# --- Susun daftar remoteip umum ---
+function Build-RemoteList([string]$Ip, [bool]$KeepLan) {
+    $remote = @()
+    if ($Ip) { $remote += $Ip }
+    if ($KeepLan) { $remote += $lanSubnet }
+    return $remote
+}
+
+function Set-FirewallRule {
+    param(
+        [string]$Name,
+        [string[]]$RemoteIps,
+        [int]$LocalPort
+    )
+    $existing = Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue
+    if ($null -eq $existing) {
+        New-NetFirewallRule -DisplayName $Name `
+            -Direction Inbound -Action Allow -Protocol TCP `
+            -LocalPort $LocalPort -RemoteAddress $RemoteIps | Out-Null
+        Write-Host "Rule '$Name' dibuat baru (TCP $LocalPort)."
+    }
+    else {
+        Set-NetFirewallRule -DisplayName $Name -Enabled True
+        Set-NetFirewallAddressFilter -InputObject $existing -RemoteAddress $RemoteIps
+        Write-Host "Rule '$Name' diperbarui."
+    }
+
+    $rule = Get-NetFirewallRule -DisplayName $Name
+    if ($null -eq $rule) { return }
+    $filter = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule
+    Write-Host "  Protocol/Port: TCP $LocalPort"
+    Write-Host "  RemoteIP     : $($filter.RemoteAddress -join ', ')"
+}
+
+if ($HpcGateway) {
+    Write-Host '=== Mode B - firewall gateway HPC (8100) + kunci Ollama (11434) ==='
+
+    # 1/2) Ollama 11434 -> hanya subnet NAT Docker/WSL
+    $natSubnets = Get-DockerNatSubnets
+    if ($natSubnets.Count -eq 0) {
+        Write-Warning 'Subnet NAT Docker/WSL tidak terdeteksi (Docker belum jalan?). Rule 11434 TIDAK diubah.'
+    }
+    else {
+        Write-Host "Subnet NAT Docker/WSL terdeteksi: $($natSubnets -join ', ')"
+        Set-FirewallRule -Name $ollamaRuleName -RemoteIps $natSubnets -LocalPort 11434
+        Write-Host 'CATATAN: Ollama kini hanya dapat dijangkau dari container Docker (gateway).'
+        Write-Host 'Bila subnet NAT berubah (pasca restart/upgrade WSL), jalankan ulang script ini.'
+    }
+
+    # 2/2) Gateway 8100 -> IP platform (+ subnet LAN transisi) atau LAN (tahap 1)
+    $remote = Build-RemoteList $PlatformIP ([bool]$KeepLanSubnet)
+    if ($remote.Count -eq 0) {
+        $remote = @($lanSubnet)
+        Write-Host "PlatformIP belum diisi - tahap 1: 8100 sementara terbuka untuk $lanSubnet."
+    }
+    Set-FirewallRule -Name $gatewayRuleName -RemoteIps $remote -LocalPort 8100
+    if ($KeepLanSubnet) {
+        Write-Host 'CATATAN: subnet LAN tetap diizinkan. Jalankan ulang dengan -PlatformIP TANPA -KeepLanSubnet untuk produksi.'
+    }
+    elseif ($PlatformIP) {
+        Write-Host 'CATATAN tahap 2: 8100 terkunci hanya untuk IP platform.'
+    }
+    exit 0
+}
+
+# --- Mode lama (Mode A): hanya atur rule Ollama 11434 ---
+if (-not $PlatformIP) {
+    Write-Host 'Perlu -PlatformIP (atau pakai -HpcGateway untuk Mode B).'
+    exit 1
+}
+
+$remote = Build-RemoteList $PlatformIP ([bool]$KeepLanSubnet)
 try {
-    netsh advfirewall firewall set rule name="$ruleName" new remoteip=($remote -join ',') | Out-Null
+    Set-FirewallRule -Name $ollamaRuleName -RemoteIps $remote -LocalPort 11434
 } catch {
     Write-Host "GAGAL: $($_.Exception.Message)"
     exit 1
 }
-
-$rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-if ($null -eq $rule) {
-    Write-Host "Rule '$ruleName' tidak ditemukan - buat dulu rule dasarnya."
-    exit 2
-}
-
-$addressFilter = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule
-Write-Host "Rule '$ruleName' diperbarui:"
-Write-Host "  Enabled      : $($rule.Enabled)"
-Write-Host "  Action       : $($rule.Action)"
-Write-Host "  Protocol/Port: TCP 11434"
-Write-Host "  RemoteIP     : $($addressFilter.RemoteAddress -join ', ')"
 if ($KeepLanSubnet) {
     Write-Host 'CATATAN: subnet LAN tetap diizinkan. Jalankan ulang TANPA -KeepLanSubnet untuk mengunci hanya IP platform.'
 }

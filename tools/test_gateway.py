@@ -197,10 +197,11 @@ def run_tests() -> None:
         )
 
         health = httpx.get("http://127.0.0.1:8102/health", timeout=10.0)
+        body = health.json() if health.status_code == 200 else {}
         record(
             "T7",
-            health.status_code == 200 and health.json().get("status") == "ok",
-            f"status={health.status_code} body={health.json() if health.status_code == 200 else None}",
+            health.status_code == 200 and body.get("status") == "healthy",
+            f"status={health.status_code} body={body if body else None} (porting platform: status='healthy')",
         )
 
         upstream = httpx.get(

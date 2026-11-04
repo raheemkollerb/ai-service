@@ -4,6 +4,21 @@ Status dokumen: **rencana — belum dieksekusi**. Semua perintah di sini baru
 dijalankan setelah lampu hijau dari Anda.
 Disusun: 2026-11-04 · repo `raheemkollerb/ai-service` (branch `main`)
 
+**Update eksekusi (2026-11-04)** — persiapan kode & dokumen Mode B sudah
+dikerjakan dari sisi repo:
+
+- `deploy-hpc/` dibuat: `docker-compose.hpc.yml` + `.env.example` + `README.md` (Fase 1).
+- `apps/ai` di-port ke **implementasi platform sebagai acuan tunggal**;
+  acceptansi `tools/test_gateway.py` T1–T8 **PASS ulang** (T7 kini memeriksa
+  `{"status":"healthy", "service":"ai-gateway", ...}` mengikuti versi platform;
+  body 503 `/ai/health/upstream` dirapikan menjadi flat).
+- `tools/restrict-firewall.ps1` mendapat mode `-HpcGateway` (11434→NAT Docker,
+  8100→IP platform) — eksekusinya tetap oleh admin di HPC (Fase 3).
+- Dokumen diperbarui: `README-INTEGRASI.md` § 7 Mode B; `RUNBOOK` § 1/2.5/4.2/
+  4.3/4.4 revisi; `ai-service.md` catatan porting (T7 + 503 flat).
+- Tersisa manual di HPC: Fase 0 (instal Docker Desktop), build & start compose,
+  firewall tahap 1–2, verifikasi checklist § 7 — setelah server platform siap.
+
 Dokumen ini memuat ide: **"platform utama tidak perlu menambah/menempel folder
 `apps/ai`"** dengan menjalankan AI Gateway sebagai container Docker **di mesin
 HPC ini sendiri** — dikaitkan dengan kondisi aktual per hari ini.
@@ -107,7 +122,8 @@ docker run --rm hello-world                    # tes pull + jaringan
   - env: `SERVICE_KEY=${SERVICE_KEY}` · `ENVIRONMENT=${ENVIRONMENT:-production}`
     · `LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:11434/v1}`
     · `LLM_MODEL=${LLM_MODEL:-qwen3:30b-a3b}` · `LLM_TIMEOUT=${LLM_TIMEOUT:-120}`
-  - healthcheck berbasis **python** (image slim tidak punya curl):
+   - healthcheck berbasis **python** — image hasil `apps/ai/Dockerfile` sebenarnya
+     sudah memuat curl; healthcheck python dipilih agar tidak bergantung tooling image:
     `test: ["CMD","python","-c","import urllib.request;urllib.request.urlopen('http://localhost:8100/health')"]`
 - `.env.example` (`SERVICE_KEY=`, `LLM_MODEL=`, `LLM_TIMEOUT=120`) + tangani `.env` di `.gitignore`.
 

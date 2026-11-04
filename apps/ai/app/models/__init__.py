@@ -1,3 +1,4 @@
-from app.models.base import ChatMessage, ChatRequest, HealthResponse, UpstreamHealth
+"""Models module initialization"""
+from app.models.base import HealthResponse
 
-__all__ = ["ChatMessage", "ChatRequest", "HealthResponse", "UpstreamHealth"]
+__all__ = ["HealthResponse"]

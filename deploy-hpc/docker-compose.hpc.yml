@@ -1,0 +1,45 @@
+# Mode B — AI Gateway sebagai container Docker di HPC (HP Z8 G4).
+#
+# Alur: BFF Express (server platform) → gateway di HPC :8100 → Ollama host (HPC).
+# Ollama TIDAK berkongsi jaringan compose; aksesnya menabawakan pakai
+# host.docker.internal (Docker Desktop/WSL2 + extra_hosts di bawah).
+#
+# Prasyarat jalankan:
+#   1. Docker Desktop terpasang & berjalan (Fase 0 plan-run-docker.md).
+#   2. Salin .env.example → .env lalu isi SERVICE_KEY
+#      (HARUS sama dengan SERVICE_KEY di root .env platform!).
+#
+# Jalankan:
+#   docker compose -f docker-compose.hpc.yml up -d --build
+#
+# Catatan: port 8100 ke-nat ke 0.0.0.0 — firewall Windows harus membatasi
+# RemoteIP (rule "RCC AI Gateway (:8100)", lihat Fase 3 plan-run-docker.md /
+# tools/restrict-firewall.ps1 -HpcGateway).
+
+services:
+  ai:
+    build:
+      context: ../apps/ai
+      dockerfile: Dockerfile
+    ports:
+      - "8100:8100"
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - SERVICE_KEY=${SERVICE_KEY:?SERVICE_KEY wajib diisi di deploy-hpc/.env}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-ollama}
+      - LLM_MODEL=${LLM_MODEL:-qwen3:30b-a3b}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-120}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # Image slim sudah memuat curl (lihat apps/ai/Dockerfile), namun
+      # healthcheck python dipilih agar tak bergantung tooling image.
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

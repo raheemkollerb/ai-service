@@ -24,15 +24,21 @@ Browser (SSO login)
 BFF Express — apps/backend :3000           [server platform / Docker]
    │  passthrough SSE + X-Service-Key      (x-no-compression, chatLimiter 30/menit)
    ▼
-AI Gateway — FastAPI "ai" :8100            [server platform / Docker]
+AI Gateway — FastAPI "ai" :8100
+   ├─ Mode A (fallback): container compose platform [server platform]
+   │     LLM_BASE_URL = http://10.5.14.117:11434/v1   (lintas LAN)
+   └─ Mode B (aktif): container Docker di HPC ini sendiri (deploy-hpc/)
+         LLM_BASE_URL = host.docker.internal:11434/v1  (lokal HPC saja)
    │  validate → build_context → stream    (OpenAI-compatible adapter)
    ▼
 Ollama — :11434 (0.0.0.0)                  [HPC HP Z8 G4 — mesin ini]
    GPU Quadro P5000 16 GB · qwen3:30b-a3b (±30 tok/s, VRAM ±15.3/16 GiB)
 ```
 
-- **HPC hanya menjalankan Ollama** — gateway produksi berjalan di Docker server
-  platform dan memanggil Ollama lewat `LLM_BASE_URL`.
+- **Mode B aktif**: gateway berjalan sebagai container Docker di HPC ini
+  sendiri (`deploy-hpc/docker-compose.hpc.yml`) lalu memanggil Ollama via
+  `host.docker.internal` — 11434 dapat dikunci dari LAN (firewall tahap 2).
+  Mode A tetap tersedia sebagai fallback (gateway di server platform).
 - Protokol SSE (`delta` / `done` / `error`) bersumber dari gateway
   (`ai-service.md` § 7) — BFF passthrough verbatim, frontend mem-parse.
 - Tidak ada fallback provider eksternal pada kondisi apapun.
@@ -120,6 +126,41 @@ cd D:\Gust\ai-service\apps\ai
 # ollama pull <model-tag>   (pastikan quant Q4_K_M agar muat scheme partial-offload)
 ```
 
+### 2.5 AI Gateway Mode B (container Docker di HPC)
+
+Gateway produksi berjalan dari `deploy-hpc/` (rencana lengkap: `plan-run-docker.md`).
+Image gateway dibangun dari `apps/ai/Dockerfile` — sinkron dengan implementasi
+platform (single source of truth: implementasi versi platform, port 2026-11-04,
+lulus T1–T8 ulang di repo ini).
+
+```powershell
+cd D:\Gust\ai-service\deploy-hpc
+
+# Start (pertama kali + tiap update kode)
+Copy-Item .env.example .env     # sekali saja; isi SERVICE_KEY (sama dgn platform!)
+docker compose -f docker-compose.hpc.yml up -d --build
+
+# Status & log
+docker compose -f docker-compose.hpc.yml ps      # ai: healthy
+docker compose -f docker-compose.hpc.yml logs -f ai
+curl.exe -s --noproxy '*' http://127.0.0.1:8100/health     # {"status":"healthy",...}
+
+# Stop / restart
+docker compose -f docker-compose.hpc.yml restart
+docker compose -f docker-compose.hpc.yml down    # berhenti total (Ollama tetap hidup)
+
+# Update aplikasi setelah pull repo
+docker compose -f docker-compose.hpc.yml up -d --build ai
+```
+
+- Prasyarat: Docker Desktop hidup (Settings → *Start Docker Desktop when you
+  log in* = ON) + sesi login Windows aktif (sama seperti tray Ollama).
+- `SERVICE_KEY` di `deploy-hpc/.env` HARUS sama dengan root `.env` platform.
+- Health endpoint: `/health` (ringan, selalu OK bila container hidup) dan
+  `/ai/health/upstream` (503 bila runtime LLM mati) — cek upaya LLM gunakan yang terakhir.
+- Firewall: `tools/restrict-firewall.ps1 -HpcGateway [-PlatformIP <IP>]` (lihat § 4.3).
+- Versi Ollama auto-update tidak memengaruhi container (adapter OpenAI-compatible).
+
 ---
 
 ## 3. Benchmark referensi (terukur aktual — 2026-10-26)
@@ -152,6 +193,18 @@ Ringkasan; detail per-file di `integration/README-INTEGRASI.md`.
 
 ### 4.2 Kunci env wajib (server platform)
 
+**Mode B (aktif)** — gateway di HPC; platform tinggal 2 kunci:
+
+```
+AI_SERVICE_URL=http://<IP-HPC>:8100               # IP LAN HPC ini
+SERVICE_KEY=<nilai-sama-dengan deploy-hpc/.env>   # gateway + BFF HARUS sama
+```
+
+Kunci `LLM_*` tidak lagi dipakai di platform (gateway membawa konfigur LLM
+sendiri via `deploy-hpc/.env`) — biarkan saja, dipakai Mode A.
+
+**Mode A (fallback)** — gateway di server platform:
+
 ```
 SERVICE_KEY=<nilai-sama-semua-service>            # gateway + BFF HARUS sama
 LLM_BASE_URL=http://10.5.14.117:11434/v1          # IP LAN HPC ini (bukan localhost)
@@ -159,8 +212,10 @@ LLM_MODEL=qwen3:30b-a3b
 AI_SERVICE_URL=http://ai:8100                     # internal jaringan Docker
 ```
 
-Gateway memakai default `host.docker.internal:11434` bila `LLM_BASE_URL` tidak
-diset — karena Ollama ada di mesin BERBEDA, `LLM_BASE_URL` ke IP LAN **wajib**.
+Pada Mode A, gateway memakai default `host.docker.internal:11434` bila
+`LLM_BASE_URL` tidak diset — karena Ollama ada di mesin BERBEDA,
+`LLM_BASE_URL` ke IP LAN **wajib**. Pada Mode B tidak perlu: pathnya lokal
+HPC (`host.docker.internal` di container gateway).
 
 ### 4.3 Perketat firewall HPC (hanya IP server platform)
 
@@ -179,23 +234,38 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:\Gust\ai-service\tools\res
 menjadi IP platform saja (atau + subnet LAN bila flag `-KeepLanSubnet`), tanpa
 mengubah nama rule agar compose/pane docker tidak tersentuh.
 
-### 4.4 Rangkaian verifikasi end-to-end (acceptance § 9.3)
+**Mode B** — satu perintah mengatur 2 port di HPC (11434 → subnet NAT
+Docker/WSL, 8100 → IP platform; buat rule 8100 bila belum ada):
+
+```powershell
+# Tahap 1 (IP platform belum diketahui): 8100 sementara terbuka subnet LAN,
+#                                        11434 langsung dikunci NAT Docker
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\Gust\ai-service\tools\restrict-firewall.ps1 -HpcGateway
+
+# Tahap 2 (IP platform diketahui): kunci 8100 ke IP platform
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\Gust\ai-service\tools\restrict-firewall.ps1 -HpcGateway -PlatformIP <IP-server-platform>
+```
+
+### 4.4 Rangkaian verifikasi end-to-end (acceptance § 9.3, skema Mode B)
 
 ```bash
-# 1. Dari server platform — runtime HPC bisa dijangkau
-curl http://10.5.14.117:11434/v1/models
+# 1. HPC — runtime hidup & hangat + container gateway healthy
+curl http://127.0.0.1:11434/api/version
+docker compose -f D:\Gust\ai-service\deploy-hpc\docker-compose.hpc.yml ps   # ai: healthy
 
-# 2. Hidupkan compose (gateway + BFF + frontend)
-docker compose up -d redis ai backend analytics frontend
-docker compose ps ai            # status healthy
+# 2. Dari server platform — gateway di HPC terjangkau
+curl http://10.5.14.117:8100/health          # → 200 {"status":"healthy",...}
 
-# 3. Health upstream via BFF (harap 200 + available:true)
-curl localhost:3000/api/ai/health/upstream -H "X-Service-Key: <SERVICE_KEY>"
+# 3. Platform — hidupkan stack TANPA service ai (Mode B)
+docker compose up -d redis analytics backend frontend
 
-# 4. Browser: login SSO → panel Virtual Assistant → kirim chat
+# 4. Health upstream via BFF (dev: SKIP_AUTH=true; produksi via browser)
+curl localhost:3000/api/ai/health/upstream   # → available:true
+
+# 5. Browser: login SSO → panel Virtual Assistant → kirim chat
 #    → token streaming progresif + badge "Online — LLM Lokal"
 
-# 5. Firewall: dari mesin di luar subnet 10.5.14.0/23 → curl 11434 harus ditolak
+# 6. Firewall: dari mesin di luar whitelist → curl 8100 & 11434 harus ditolak
 ```
 
 ---
@@ -204,7 +274,8 @@ curl localhost:3000/api/ai/health/upstream -H "X-Service-Key: <SERVICE_KEY>"
 
 - [ ] HPC login (Ollama tray + preload otomatis jalan)
 - [ ] `curl http://10.5.14.117:11434/api/version` dari server platform → 200
-- [ ] `docker compose up -d redis ai backend analytics frontend` → `ai` healthy
+- [ ] HPC: `docker compose -f deploy-hpc\docker-compose.hpc.yml ps` → `ai` **healthy**
+- [ ] Platform: `docker compose up -d redis analytics backend frontend` (tanpa `ai`, Mode B)
 - [ ] `curl localhost:3000/api/ai/health/upstream` → `available:true` + model terdaftar
 - [ ] Chat streaming browser berjalan progresif (token mengalir, bukan blok teks sekaligus)
 - [ ] 2 chat paralel masih lancar (±30 tok/s per stream)

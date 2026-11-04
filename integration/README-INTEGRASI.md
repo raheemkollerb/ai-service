@@ -92,3 +92,26 @@ T1-T8 tools/test_gateway.py (opsi ulang di platform, LLM_BASE_URL → mock atau 
 - Driver NVIDIA 582.78 (R580 U11) memecahkan crash `0xc0000005`.
 - Benchmark: `qwen3:30b-a3b` 30.3 tok/s (1 stream) & ≈30 tok/s per stream
   (2 stream paralel), VRAM ±15.3/16 GiB — rincian di `workstation-setup.md` § 4.
+
+## 7. Mode B — Gateway berjalan di HPC (deployment aktif sejak 2026-11-04)
+
+Alternatif tanpa menambah folder/blok compose di monorepo platform:
+**AI Gateway + Ollama keduanya hidup di HPC**, platform hanya mengubah env.
+
+```
+Browser (SSO) → BFF Express :3000  [server platform]
+                    │  AI_SERVICE_URL = http://<IP-HPC>:8100
+                    ▼
+     AI Gateway (container Docker di HPC) :8100
+                    │  LLM_BASE_URL = host.docker.internal:11434/v1
+                    ▼
+     Ollama :11434 [HPC] — TIDAK ter-expose ke LAN
+```
+
+| Sisi | Perubahan |
+|---|---|
+| HPC (repo ini) | `deploy-hpc/docker-compose.hpc.yml` + `deploy-hpc/.env` (`SERVICE_KEY` = nilai platform) — build dari `apps/ai` |
+| Platform | root `.env`: `AI_SERVICE_URL=http://<IP-HPC>:8100` + `SERVICE_KEY` sama. Compose platform tidak menjalankan service `ai` (dicadangkan di profile `ai-local`) |
+| Firewall HPC | `tools/restrict-firewall.ps1 -HpcGateway [-PlatformIP <IP>]` — 11434 dikunci ke subnet NAT Docker/WSL, 8100 terbuka untuk IP/subnet platform |
+
+Detail rencana & risiko: `plan-run-docker.md`. Operasional harian: `RUNBOOK-ai-service.md` § 2.5.

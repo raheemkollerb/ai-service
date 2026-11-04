@@ -1,57 +1,108 @@
-import httpx
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+"""
+Chat API — endpoint streaming SSE untuk BFF Express.
+"""
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.core.security import verify_service_key
-from app.models.base import ChatRequest
-from app.providers.ollama_client import UpstreamUnavailable, list_models, stream_chat_completions
-from app.services.chat_service import (
-    ChatValidationError,
-    build_context,
-    format_sse_frame,
-    validate_messages,
+from app.providers import ollama_client
+from app.providers.ollama_client import UpstreamUnavailable
+from app.services import chat_service
+from app.services.chat_service import ChatValidationError
+
+settings = get_settings()
+router = APIRouter(
+    prefix="/ai",
+    tags=["ai"],
+    dependencies=[Depends(verify_service_key)],
 )
 
-router = APIRouter(prefix="/ai", dependencies=[Depends(verify_service_key)])
+
+class ChatMessageIn(BaseModel):
+    role: str
+    content: str
 
 
-@router.post("/chat")
+class ChatRequest(BaseModel):
+    messages: list[ChatMessageIn] = Field(default_factory=list)
+    model: str | None = None
+
+
+class HealthUpstream(BaseModel):
+    llm_base_url: str
+    model: str
+    available: bool
+    models: list[str] | None = None
+    detail: str | None = None
+
+
+@router.post(
+    "/chat",
+    summary="Chat streaming terhadap LLM lokal (SSE)",
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
 async def chat(request: ChatRequest) -> StreamingResponse:
-    settings = get_settings()
-    model = settings.llm_model
-    if request.model and request.model == settings.llm_model:
-        model = request.model
+    """
+    Terima riwayat percakapan dari BFF, streaming balasan LLM lokal.
+
+    Protokol SSE:
+      data: {"type": "delta", "text": "..."}
+      data: {"type": "done", "finish_reason": "...", "usage": {...}}
+      data: {"type": "error", "message": "..."}
+    """
     try:
-        messages = validate_messages([message.model_dump() for message in request.messages])
+        messages = chat_service.validate_messages(
+            [message.model_dump() for message in request.messages]
+        )
     except ChatValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    context = build_context(messages)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    requested_model = request.model
+    if requested_model != settings.llm_model:
+        # Whitelist sederhana: hanya model yang ter-set di konfigurasi diizinkan.
+        requested_model = None
+
     return StreamingResponse(
-        (
-            format_sse_frame(event)
-            async for event in stream_chat_completions(context, model)
-        ),
+        chat_service.stream_chat(messages, model=requested_model),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
-@router.get("/health/upstream")
-async def health_upstream() -> dict:
-    settings = get_settings()
+@router.get("/health/upstream", response_model=HealthUpstream)
+async def health_upstream() -> JSONResponse:
+    """
+    Cek ketersediaan runtime LLM lokal di HPC (dedicated endpoint).
+
+    Runtime hidup -> 200 {available: true, models: [...]}.
+    Runtime mati  -> 503 yang tetap berbentuk HealthUpstream (flat), bukan
+    dibungkus {"detail": {...}}, agar passthrough BFF tetap kontrak.
+    """
     try:
-        models = await list_models()
-    except (UpstreamUnavailable, httpx.HTTPError) as exc:
-        return {
-            "llm_base_url": settings.llm_base_url,
-            "model": settings.llm_model,
-            "available": False,
-            "error": str(exc),
-        }
-    return {
-        "llm_base_url": settings.llm_base_url,
-        "model": settings.llm_model,
-        "available": True,
-        "models": models,
-    }
+        models = await ollama_client.list_models()
+    except UpstreamUnavailable as exc:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=HealthUpstream(
+                llm_base_url=settings.llm_base_url,
+                model=settings.llm_model,
+                available=False,
+                detail=str(exc),
+            ).model_dump(),
+        )
+    return JSONResponse(
+        content=HealthUpstream(
+            llm_base_url=settings.llm_base_url,
+            model=settings.llm_model,
+            available=True,
+            models=models,
+        ).model_dump(),
+    )
