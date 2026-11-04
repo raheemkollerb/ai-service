@@ -60,7 +60,7 @@ Ollama — :11434 (0.0.0.0)                  [HPC HP Z8 G4 — mesin ini]
 ### 2.2 Mulai / berhenti / periksa
 
 ```powershell
-# Status Ollama (harus mengembalikan {"version":"0.40.6"})
+# Status Ollama (harus JSON {"version":"..."} — angka versi bisa berubah/naik akibat auto-update)
 curl.exe -s --noproxy '*' http://127.0.0.1:11434/api/version
 
 # Jika Ollama tidak berjalan — mulai via aplikasi tray (user-level, tanpa admin):
@@ -69,6 +69,17 @@ Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe" -WindowStyle Hi
 # Berhenti total (hati-hati: meng-unload model)
 Get-Process "ollama app","ollama" -ErrorAction SilentlyContinue | Stop-Process -Force
 ```
+
+**Tiga tanda LLM sudah hidup (cara mengetahui):**
+
+1. `ollama ps` — baris model muncul dengan kolom `PROCESSOR` memperlihatkan split
+   mis. `23%/77% CPU/GPU`, dan `UNTIL: Forever` (KEEP_ALIVE=-1 aktif — model
+   menetap di memori). Bila kolom kosong, model belum termuat: jalankan
+   `tools/ollama-preload.ps1` atau kirim satu chat.
+2. `nvidia-smi --query-gpu=memory.used,memory.total --format=csv` — VRAM
+   ±15.3/16 GiB saat model utama hangat.
+3. Dari server platform / mesin lain: `curl http://10.5.14.117:11434/api/version`
+   → JSON versi (bukan timeout) — jalur jaringan + firewall terbuka.
 
 Penting: Ollama berjalan sebagai **aplikasi user** (bukan Windows service) —
 butuh sesi login Windows aktif untuk hidup. Bila env user-level diubah,
