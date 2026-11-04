@@ -45,7 +45,7 @@ Ollama — :11434 (0.0.0.0)                  [HPC HP Z8 G4 — mesin ini]
 
 | Komponen | Kondisi |
 |---|---|
-| Ollama **0.40.6** | `C:\Users\FastNeutron\AppData\Local\Programs\Ollama\` |
+| Ollama **0.40.13** | `C:\Users\FastNeutron\AppData\Local\Programs\Ollama\` **(0.40.6 → auto-update ke 0.40.13 pada 2026-11-04 — cek versi setelah tiap restart)** |
 | OLLAMA_HOST | `0.0.0.0` (listen semua interface, port 11434) |
 | OLLAMA_KEEP_ALIVE | `-1` (model tidak di-unload dari VRAM) |
 | OLLAMA_MAX_LOADED_MODELS | `2` |
@@ -153,12 +153,20 @@ diset — karena Ollama ada di mesin BERBEDA, `LLM_BASE_URL` ke IP LAN **wajib**
 
 ### 4.3 Perketat firewall HPC (hanya IP server platform)
 
-Operator HPC jalankan sekali (ganti `<IP-platform>`):
+Rule saat ini berjalan dengan subnet luas `10.5.14.0/23` — setelah platform
+hidup, gunakan script:
 
 ```powershell
-# PowerShell (admin) — contoh: tambah IP platform di samping subnet LAN yang ada
-netsh advfirewall firewall set rule name="Ollama LLM (RCC AI Gateway)" new remoteip=10.5.14.0/23,<IP-platform>
+# Jalankan dari user HPC (script meminta UAC sendiri):
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\Gust\ai-service\tools\restrict-firewall.ps1 -PlatformIP <IP-server-platform>
+
+# Transisi (belum semua IP platform tahu) — pertahankan subnet LAN juga:
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\Gust\ai-service\tools\restrict-firewall.ps1 -PlatformIP <IP-server-platform> -KeepLanSubnet
 ```
+
+`restrict-firewall.ps1` mengganti RemoteIP rule `Ollama LLM (RCC AI Gateway)`
+menjadi IP platform saja (atau + subnet LAN bila flag `-KeepLanSubnet`), tanpa
+mengubah nama rule agar compose/pane docker tidak tersentuh.
 
 ### 4.4 Rangkaian verifikasi end-to-end (acceptance § 9.3)
 
@@ -191,7 +199,7 @@ curl localhost:3000/api/ai/health/upstream -H "X-Service-Key: <SERVICE_KEY>"
 - [ ] 2 chat paralel masih lancar (±30 tok/s per stream)
 - [ ] `X-Service-Key` salah → 403; tanpa cookie SSO → 401 `Login required`
 - [ ] Log `preload.log` berisi OK (model hangat)
-- [ ] (Produksi) ganti SERVICE_KEY dari nilai dev-test + sempitkan remoteip firewall ke IP platform
+- [ ] (Produksi) ganti SERVICE_KEY dari nilai dev-test + jalankan `tools/restrict-firewall.ps1 -PlatformIP <IP>` sekali
 
 ---
 
@@ -219,3 +227,50 @@ curl localhost:3000/api/ai/health/upstream -H "X-Service-Key: <SERVICE_KEY>"
 - **Retensi disk**: model di `C:\Users\FastNeutron\.ollama\models` — hapus model tak terpakai (`ollama rm <tag>`) bila penuh.
 - **Keamanan**: SERVICE_KEY prod ≠ dev-test; log gateway tidak menyimpan isi chat; remoteip firewall dibatasi ke IP server platform saat produksi.
 - Backup konfigurasi penting: env user-level Ollama (`Get-ChildItem env:OLLAMA*`), rule firewall, `HKCU Run` entry — semuanya dapat dibaca ulang dari repo ini.
+
+---
+
+## 8. Jaminan privasi: data tidak keluar ke platform lain
+
+Prinsip: model berjalan **sepenuhnya lokal** di HPC; satu-satunya jalur masuk
+adalah TCP 11434 yang dijaga firewall Windows. Isi percakapan hanya berpindah
+HPC ⇄ platform yang di-whitelist.
+
+### 8.1 Knob keamanan yang sudah dipasang
+
+| Lapisan | Status |
+|---|---|
+| Firewall inbound TCP 11434 | hanya IP di `RemoteIP` rule "Ollama LLM (RCC AI Gateway)" yang diterima; default Windows menolak sisanya. **Saat integrasi**: `tools/restrict-firewall.ps1 -PlatformIP <IP>` — kunci ke server platform, hapus subnet luas |
+| Gateway (`apps/ai`) | semua URL statis dari env (`LLM_BASE_URL`); grep `http` → tidak ada endpoint eksternal; tanpa fallback provider |
+| BFF & frontend | BFF memanggil `AI_SERVICE_URL` internal saja (passthrough SSE); bundle frontend `grep VITE_` bersih, no Gemini |
+| `OLLAMA_DEBUG` | 0 pada operasi normal (log hanya metadata, bukan isi prompt) |
+| Log gateway BFF/FE | tidak menyimpan isi chat |
+| Ollama update check | hanya metadata versi (bukan konten percakapan); pull model hanya saat diperintahkan eksplisit |
+
+### 8.2 Audit rutin (mencari tahu siapa yang menyentuh 11434)
+
+```powershell
+# Siapa terhubung SAAT INI ke port 11434:
+Get-NetTCPConnection -LocalPort 11434 -State Established |
+  Select-Object RemoteAddress, RemotePort, OwningProcess, CreationTime
+
+# Terlihat dari log Ollama (metadata request):
+Get-Content "$env:LOCALAPPDATA\Ollama\server.log" -Tail 50 -Wait
+
+# Ringkasan rule firewall aktif:
+Get-NetFirewallRule -DisplayName "Ollama LLM (RCC AI Gateway)" | Get-NetFirewallAddressFilter
+```
+
+Bila `RemoteAddress` menampilkan IP yang bukan server platform (atau bukan
+`127.0.0.1` dari gateway lokal), jalankan `restrict-firewall.ps1` + catat IP
+itu untuk dicari sumbernya di switching/ARP.
+
+### 8.3 Perilaku Ollama dapat auto-update
+
+Perhatian: pada 2026-11-04, versi 0.40.6 berubah sendiri menjadi 0.40.13
+(oleh update checker tray). Implikasi:
+- Setelah update, Ollama restart dengan env user yang sama — `OLLAMA_HOST=0.0.0.0`
+  dan firewall rule tetap berlaku; model ter-unload saat restart, jalankan ulang
+  `tools/ollama-preload.ps1` untuk hangatkan manual.
+- Bila kebijakan menuntut versi pin, matikan auto-update pada tray Ollama →
+  Settings → **Automatic Updates** OFF, atau unduh versi resmi terpisah.
