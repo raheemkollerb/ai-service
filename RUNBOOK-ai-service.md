@@ -26,7 +26,7 @@ BFF Express — apps/backend :3000           [server platform / Docker]
    ▼
 AI Gateway — FastAPI "ai" :8100
    ├─ Mode A (fallback): container compose platform [server platform]
-   │     LLM_BASE_URL = http://10.5.14.117:11434/v1   (lintas LAN)
+    │     LLM_BASE_URL = http://<IP-LAN-HPC>:11434/v1   (lintas LAN)
    └─ Mode B (aktif): container Docker di HPC ini sendiri (deploy-hpc/)
          LLM_BASE_URL = host.docker.internal:11434/v1  (lokal HPC saja)
    │  validate → build_context → stream    (OpenAI-compatible adapter)
@@ -34,6 +34,11 @@ AI Gateway — FastAPI "ai" :8100
 Ollama — :11434 (0.0.0.0)                  [HPC HP Z8 G4 — mesin ini]
    GPU Quadro P5000 16 GB · qwen3:30b-a3b (±30 tok/s, VRAM ±15.3/16 GiB)
 ```
+
+Catatan IP: HPC memakai DHCP — IP LAN bisa pindah (2026-11-04: `10.5.14.117`,
+2026-11-05: `10.5.15.9`; masih dalam subnet keamanan `10.5.14.0/23`). Bila
+platform tidak bisa menjangkau gateway, cek `ipconfig` dulu; untuk stabil,
+reservasi IP (static lease) dari admin jaringan.
 
 - **Mode B aktif**: gateway berjalan sebagai container Docker di HPC ini
   sendiri (`deploy-hpc/docker-compose.hpc.yml`) lalu memanggil Ollama via
@@ -59,9 +64,9 @@ Ollama — :11434 (0.0.0.0)                  [HPC HP Z8 G4 — mesin ini]
 | Model utama | `qwen3:30b-a3b` (Q4, ±19 GB — partial offload GPU) |
 | Model cadangan | `qwen2.5-coder:14b` (18 tok/s GPU), `qwen14b-long` |
 | Driver GPU | NVIDIA **582.78** (R580 U11) — memecah crash `0xc0000005` |
-| Firewall | rule "Ollama LLM (RCC AI Gateway)": TCP 11434, RemoteIP `10.5.14.0/23`, semua profil |
+| Firewall | rule "Ollama LLM (RCC AI Gateway)": TCP 11434, RemoteIP `10.5.14.0/23`, semua profil · **+ rule "RCC AI Gateway (:8100)": TCP 8100, RemoteIP `10.5.14.0/23` (tahap 1, 2026-11-05)** |
 | Autostart | tray "Ollama app" start per login; **+ preload model otomatis** (lihat 2.3) |
-| IP LAN | `10.5.14.117/23` (Wi-Fi 2 profil Public) |
+| IP LAN | **DHCP — cek `ipconfig` jika dokumen tabel tak sinkron** · 2026-10-31: `10.5.14.117/23` · 2026-11-05: **`10.5.15.9/23`** (Wi-Fi 2 profil Public) |
 
 ### 2.2 Mulai / berhenti / periksa
 
@@ -84,8 +89,9 @@ Get-Process "ollama app","ollama" -ErrorAction SilentlyContinue | Stop-Process -
    `tools/ollama-preload.ps1` atau kirim satu chat.
 2. `nvidia-smi --query-gpu=memory.used,memory.total --format=csv` — VRAM
    ±15.3/16 GiB saat model utama hangat.
-3. Dari server platform / mesin lain: `curl http://10.5.14.117:11434/api/version`
-   → JSON versi (bukan timeout) — jalur jaringan + firewall terbuka.
+3. Dari server platform / mesin lain: `curl http://<IP-LAN-HPC>:11434/api/version`
+   (per 2026-11-05: `10.5.15.9`; lihat tabel § 2.1) → JSON versi (bukan timeout)
+   — jalur jaringan + firewall terbuka.
 
 Penting: Ollama berjalan sebagai **aplikasi user** (bukan Windows service) —
 butuh sesi login Windows aktif untuk hidup. Bila env user-level diubah,
@@ -126,12 +132,18 @@ cd D:\Gust\ai-service\apps\ai
 # ollama pull <model-tag>   (pastikan quant Q4_K_M agar muat scheme partial-offload)
 ```
 
-### 2.5 AI Gateway Mode B (container Docker di HPC)
+### 2.5 AI Gateway Mode B (container Docker di HPC — **SUDAH HIDUP 2026-11-05**)
 
 Gateway produksi berjalan dari `deploy-hpc/` (rencana lengkap: `plan-run-docker.md`).
 Image gateway dibangun dari `apps/ai/Dockerfile` — sinkron dengan implementasi
 platform (single source of truth: implementasi versi platform, port 2026-11-04,
 lulus T1–T8 ulang di repo ini).
+
+Status aktual (2026-11-05): Docker Desktop **4.98.0** / engine **29.9.2**
+(WSL2, distro `docker-desktop`), `AutoStart=true` (Settings → *Start Docker
+Desktop when you log in* sudah ON), `deploy-hpc-ai-1` **healthy** dengan
+`restart: unless-stopped`, firewall rule 8100 **tahap 1** terpasang
+(`remoteip=10.5.14.0/23`); 11434 masih `10.5.14.0/23` hingga tahap 2.
 
 ```powershell
 cd D:\Gust\ai-service\deploy-hpc
@@ -196,7 +208,7 @@ Ringkasan; detail per-file di `integration/README-INTEGRASI.md`.
 **Mode B (aktif)** — gateway di HPC; platform tinggal 2 kunci:
 
 ```
-AI_SERVICE_URL=http://<IP-HPC>:8100               # IP LAN HPC ini
+AI_SERVICE_URL=http://<IP-HPC>:8100               # IP LAN HPC ini (2026-11-05: 10.5.15.9; cek ipconfig bila tak terjangkau)
 SERVICE_KEY=<nilai-sama-dengan deploy-hpc/.env>   # gateway + BFF HARUS sama
 ```
 
@@ -207,7 +219,7 @@ sendiri via `deploy-hpc/.env`) — biarkan saja, dipakai Mode A.
 
 ```
 SERVICE_KEY=<nilai-sama-semua-service>            # gateway + BFF HARUS sama
-LLM_BASE_URL=http://10.5.14.117:11434/v1          # IP LAN HPC ini (bukan localhost)
+LLM_BASE_URL=http://<IP-LAN-HPC>:11434/v1          # IP LAN HPC ini (bukan localhost)
 LLM_MODEL=qwen3:30b-a3b
 AI_SERVICE_URL=http://ai:8100                     # internal jaringan Docker
 ```
@@ -253,8 +265,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:\Gust\ai-service\tools\res
 curl http://127.0.0.1:11434/api/version
 docker compose -f D:\Gust\ai-service\deploy-hpc\docker-compose.hpc.yml ps   # ai: healthy
 
-# 2. Dari server platform — gateway di HPC terjangkau
-curl http://10.5.14.117:8100/health          # → 200 {"status":"healthy",...}
+# 2. Dari server platform — gateway di HPC terjangkau (IP HPC cek ipconfig;
+#    2026-11-05 = 10.5.15.9)
+curl http://10.5.15.9:8100/health            # → 200 {"status":"healthy",...}
 
 # 3. Platform — hidupkan stack TANPA service ai (Mode B)
 docker compose up -d redis analytics backend frontend
@@ -273,7 +286,7 @@ curl localhost:3000/api/ai/health/upstream   # → available:true
 ## 5. Checklist langsung (diprint / diikuti)
 
 - [ ] HPC login (Ollama tray + preload otomatis jalan)
-- [ ] `curl http://10.5.14.117:11434/api/version` dari server platform → 200
+- [ ] `curl http://<IP-LAN-HPC>:11434/api/version` dari server platform → 200 (IP cek tabel § 2.1)
 - [ ] HPC: `docker compose -f deploy-hpc\docker-compose.hpc.yml ps` → `ai` **healthy**
 - [ ] Platform: `docker compose up -d redis analytics backend frontend` (tanpa `ai`, Mode B)
 - [ ] `curl localhost:3000/api/ai/health/upstream` → `available:true` + model terdaftar
@@ -298,6 +311,9 @@ curl localhost:3000/api/ai/health/upstream   # → available:true
 | 2 chat paralel berurutan (antre) | `OLLAMA_NUM_PARALLEL` bukan 2 | set 2 (atau 1 dengan antrean, ditangani BFF) |
 | `finish_reason`/`usage` hilang | parsing top-level chunk | gunakan `choices[0]` di `ollama_client.py` |
 | Ollama tidak listen `0.0.0.0` | env tidak ter-apply saat restart | cek `[Environment]::GetEnvironmentVariable('OLLAMA_HOST','User')`, restart Ollama |
+| Docker Desktop dibuka tapi engine tidak hidup (backend exit / "WSL not installed") | VT-x di BIOS OFF → `HCS_E_HYPERV_NOT_INSTALLED` dalam `com.docker.backend.exe.log` | enable **Virtualization Technology** di BIOS HP (F10 → Advanced → Device Configuration); kasus 2026-11-05 seperti ini — bukan bug installer |
+| `wsl -l -v` tidak menampilkan `docker-desktop` | distro Docker belum diprovision | pastikan engine Docker Desktop *running* dulu (provisioning otomatis saat start; `ext4.vhdx` di `%LOCALAPPDATA%\Docker\wsl\main`) |
+| Gateway container terus `unhealthy` | Ollama mati / salah env | `curl 127.0.0.1:11434/api/version`; `docker compose logs ai`; cek `deploy-hpc/.env` |
 
 ---
 

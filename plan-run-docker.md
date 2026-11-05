@@ -78,7 +78,8 @@ HPC ini sendiri** — dikaitkan dengan kondisi aktual per hari ini.
 
 ### 1.3 Jaringan & batasan aktif
 
-- HPC IP **10.5.14.117/23** (Wi-Fi 2, profil Public).
+- HPC IP **10.5.14.117/23** (Wi-Fi 2, profil Public) — *update 2026-11-05:
+  DHCP memberi **10.5.15.9**; masih dalam subnet `10.5.14.0/23`.*
 - Firewall rule **"Ollama LLM (RCC AI Gateway)"** — TCP 11434, RemoteIP
   `10.5.14.0/23` (masih subnet luas: seluruh LAN bisa menjangkau 11434).
 - **Server platform belum live**; IP server platform **belum diketahui**.
@@ -97,7 +98,7 @@ HPC ini sendiri** — dikaitkan dengan kondisi aktual per hari ini.
 
 ```
 Browser (SSO)  →  BFF Express :3000            [server platform / Docker]
-                     │  AI_SERVICE_URL = http://10.5.14.117:8100
+                     │  AI_SERVICE_URL = http://10.5.15.9:8100  (IP HPC saat ini; DHCP — cek ipconfig)
                      ▼
      AI Gateway (container Docker di HPC) :8100   ← build dari apps/ai/Dockerfile
                      │  LLM_BASE_URL = host.docker.internal:11434  (tidak lewat LAN)
@@ -161,7 +162,7 @@ Copy-Item .env.example .env    # isi SERVICE_KEY (sinkron dengan nilai platform 
 docker compose -f docker-compose.hpc.yml up -d --build
 docker compose ps              # STATUS healthy
 curl.exe -s --noproxy '*' http://127.0.0.1:8100/health        # {"status":"ok"}
-curl.exe -s --noproxy '*' http://10.5.14.117:8100/health      # dari mesin lain di LAN → OK
+curl.exe -s --noproxy '*' http://10.5.15.9:8100/health        # dari mesin lain di LAN → OK (IP cek ipconfig)
 ```
 - Smoke: SSE chat + cek 403 kunci salah terhadap container (client `python httpx` kecil).
 - Benchmark: tidak perlu ulang penuh — container memakai Ollama yang sama; angka tetap acuan § 1.1.
@@ -191,8 +192,8 @@ netsh advfirewall firewall set rule name="Ollama LLM (RCC AI Gateway)" new remot
 
 ### Fase 5 — Checklist 9.3 (runtime penuh, saat platform hidup)
 
-1. Server platform: `curl http://10.5.14.117:8100/health` → 200.
-2. BFF env: `AI_SERVICE_URL=http://10.5.14.117:8100`, `SERVICE_KEY` = nilai `.env` HPC.
+1. Server platform: `curl http://10.5.15.9:8100/health` → 200 (IP HPC cek ipconfig).
+2. BFF env: `AI_SERVICE_URL=http://10.5.15.9:8100`, `SERVICE_KEY` = nilai `.env` HPC.
 3. `docker compose up -d backend frontend` (platform **tanpa** service `ai`).
 4. Browser → panel Virtual Assistant → chat streaming progresif.
 5. Mesin non-whitelist → 8100 & 11434 ditolak.
@@ -224,7 +225,7 @@ netsh advfirewall firewall delete rule name="RCC AI Gateway (:8100)"
 ## 7. Kriteria sukses Mode B
 
 - [ ] `docker compose ps` → `ai` **healthy**
-- [ ] `/health` 200 dari: 127.0.0.1 · 10.5.14.117 (LAN) · server platform
+- [ ] `/health` 200 dari: 127.0.0.1 · IP LAN HPC — 2026-11-05 `10.5.15.9` (DHCP) · server platform
 - [ ] Chat SSE via container: delta progresif + `done {finish_reason}` + tanpa 5xx
 - [ ] `X-Service-Key` salah → 403
 - [ ] 11434 tidak terjangkau dari mesin non-whitelist (tahap 2 firewall)
