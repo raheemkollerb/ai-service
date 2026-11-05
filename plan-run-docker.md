@@ -1,8 +1,34 @@
 # PLAN — Menjalankan AI Gateway via Docker di HPC ("Mode B")
 
-Status dokumen: **rencana — belum dieksekusi**. Semua perintah di sini baru
-dijalankan setelah lampu hijau dari Anda.
-Disusun: 2026-11-04 · repo `raheemkollerb/ai-service` (branch `main`)
+Status dokumen: **Fase 0–3 sudah dieksekusi 2026-11-05** (bukti log di bawah);
+Fase 4–5 menyusul. Disusun: 2026-11-04 · repo `raheemkollerb/ai-service`
+(branch `main`)
+
+**Update eksekusi Fase 0–3 (2026-11-05) — Mode B HIDUP di HPC:**
+
+- **Fase 0:** penyebab "Docker gagal dibuka" = **Virtualization Technology
+  (VT-x) di BIOS HP Z8 G4 OFF** + log `HCS_E_HYPERV_NOT_INSTALLED`
+  (`com.docker.backend.exe.log`). VT-x di-enable via BIOS (F10 → Advanced →
+  Device Configuration); *Virtual Machine Platform* ternyata sudah terpasang,
+  jadi tidak perlu `wsl --install --no-distribution`. Setelah BIOS: WSL Store
+  3.0.3.0, distro `docker-desktop` **Running (WSL2)**, engine 29.9.2,
+  `docker run --rm hello-world` OK, `AutoStart=true` di settings-store.json.
+- **Fase 2:** `.env` dibuat dari `.env.example` dengan SERVICE_KEY dev acak
+  (32-byte, tidak di-commit; tertutup `.gitignore`). `docker compose -f
+  docker-compose.hpc.yml up -d --build` → `deploy-hpc-ai-1` **healthy**,
+  `restart: unless-stopped`. `/health` 200 dari `127.0.0.1` **dan** LAN.
+- **Fase 3 tahap 1:** rule `"RCC AI Gateway (:8100)"` TCP 8100,
+  `remoteip=10.5.14.0/23`, semua profile (dibuat via UAC 2026-11-05).
+- **⚠️ IP HPC berubah 10.5.14.117 → 10.5.15.9** (DHCP Wi-Fi 2, tetap dalam
+  subnet /23 sehingga rule firewall tahap 1 tetap valid). Saat server platform
+  live gunakan `AI_SERVICE_URL=http://10.5.15.9:8100` (atau reservasi DHCP agar
+  stabil) + sinkronisasi SERVICE_KEY.
+- Smoke test lulus: kunci salah → **403**; `/ai/health/upstream` →
+  `available:true` melalui `host.docker.internal:11434` (NAT Docker → Ollama
+  lokal jalan); SSE chat → `delta` progresif + `done {finish_reason:"stop"}`.
+- Tersisa manual: firewall **tahap 2** (11434→subnet NAT Docker + 8100→IP
+  platform) saat IP platform diketahui; checklist § 7 (reboot → container hidup
+  otomatis + preload Ollama); Fase 4 (dokumen) & Fase 5 (integrasi platform).
 
 **Update eksekusi (2026-11-04)** — persiapan kode & dokumen Mode B sudah
 dikerjakan dari sisi repo:
