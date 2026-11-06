@@ -18,6 +18,7 @@ Ollama di HPC: LLM_BASE_URL default http://127.0.0.1:11434/v1.
 """
 import argparse
 import json
+import re
 import os
 import subprocess
 import sys
@@ -38,6 +39,11 @@ results: list[tuple[str, str, str]] = []
 
 def record(name: str, ok: bool, note: str) -> None:
     results.append((name, "PASS" if ok else "FAIL", note))
+
+
+def _normalized_digits(text: str) -> str:
+    """Angka tanpa pemisah ribuan ('4.321'/'4,321'/'4321' → '4321' setara)."""
+    return re.sub(r"[.,\s\u00a0\t]", "", text)
 
 
 def wait_ready(url: str, timeout: float = 40.0) -> bool:
@@ -133,7 +139,10 @@ def run_case(case: dict) -> None:
         not call_results
         or all(r.get("status") in ("ok", "timeout") for r in call_results)
     ) and any(r.get("status") == "ok" for r in call_results)
-    numbers_hit = not case.get("expect_number") or str(case["expect_number"]) in final_text
+    numbers_hit = not case.get("expect_number") or (
+        str(case["expect_number"])
+        in _normalized_digits(final_text)
+    )
     ok = tool_ok and args_ok and ok_ranges and result_ok and numbers_hit
     notes = []
     if not tool_ok:
