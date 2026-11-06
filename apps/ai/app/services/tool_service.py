@@ -242,20 +242,25 @@ def clamp_observation(
     if len(serialized) <= limit:
         return serialized
 
-    # 1) potong daftar terbesar di peta teratas (respons daftar/logbook)
+    # 1) potong daftar terbesar di peta teratas (respons daftar/logbook):
+    #    lepas satu per satu item belakang hingga muat — data parsial tersisa
     if isinstance(payload, dict):
-        list_keys = [k for k, v in payload.items() if isinstance(v, list)]
+        list_keys = sorted(
+            [k for k, v in payload.items() if isinstance(v, list)],
+            key=lambda k: len(json.dumps(payload.get(k), ensure_ascii=False)),
+            reverse=True,
+        )
         trimmed = dict(payload)
-        shrink_step = max(1, limit // 40)
-        for key in sorted(list_keys, key=lambda k: len(json.dumps(payload.get(k), ensure_ascii=False)), reverse=True):
-            while isinstance(trimmed.get(key), list) and trimmed[key]:
-                # pangkas dahulu seluruh daftar bertingkat bila ada
-                items = list(trimmed[key])
-                reduced = max(0, len(items) - shrink_step)
-                trimmed[key] = items[:reduced] if reduced > 0 else []
+        for key in list_keys:
+            items = list(trimmed[key])
+            while items:
+                trimmed[key] = items
                 candidate = json.dumps(trimmed, ensure_ascii=False)
                 if len(candidate) <= limit - 30:
                     return candidate + " …[data dipotong]"
+                items = items[:-1]
+            # daftar habis dilepas seluruhnya namun tetap tercatat kosong
+            trimmed[key] = []
         # 2) terakhir: potong mentah string
         head = json.dumps(trimmed, ensure_ascii=False)[: limit - 16]
         return head + " …[data dipotong]"

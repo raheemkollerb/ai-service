@@ -133,8 +133,11 @@ def catalog_directive(allowed: typing.Sequence[str]) -> str:
         tool_lines.append(line)
 
     year_max = datetime.date.today().year
+    today_iso = datetime.date.today().isoformat()
     return (
         "\n\nALAT DATA ANALYTICS (aktif):\n"
+        f"Konteks waktu: hari ini {today_iso}; tahun berjalan {year_max} — "
+        f"tahun berjalan adalah nilai param tahun yang VALID.\n"
         "Bila (dan hanya bila) jawaban Anda membutuhkan angka platform yang "
         "belum ada di percakapan, balas HANYA dengan satu objek JSON resmi "
         "tanpa kalimat lain dan tanpa tanda baca tambahan:\n"
@@ -144,10 +147,17 @@ def catalog_directive(allowed: typing.Sequence[str]) -> str:
         f"Aturan: gunakan argumen minimal yang diperlukan; tahun berlaku "
         f"{2015}–{year_max}; tanggal format YYYY-MM-DD; jangan pernah "
         "mengarang angka, nama, atau ketentuan; angka akan tersedia melalui "
-        "observasi hasil tool yang dikirim sistem. Setelah observasi tiba, "
-        "jawab langsung berbasis data itu (sebut periode, definisi indikator, "
-        "dan cakupan) tanpa mengirim JSON baru — hanya satu putaran. Bila "
-        "pertanyaan tidak membutuhkan data platform, jawab narasi biasa tanpa JSON."
+        "observasi hasil tool yang dikirim sistem. "
+        "PRIORITAS: untuk pertanyaan angka platform — selama tool meng-cover "
+        "pertanyaan itu, panggil tool dulu; JANGAN menyatakan 'data tidak "
+        "tersedia' atau 'belum tersedia' sebelum tool pernah dijalankan, dan "
+        "JANGAN menolak karena merasa tahun/periode di masa depan — "
+        f"statistik periset dan kegiatan tahun berjalan {year_max} valid "
+        "di platform. "
+        "Setelah observasi tiba, jawab langsung berbasis data itu (sebut "
+        "periode, definisi indikator, dan cakupan) tanpa mengirim JSON baru "
+        "— hanya satu putaran. Bila pertanyaan tidak membutuhkan data "
+        "platform, jawab narasi biasa tanpa JSON."
     )
 
 

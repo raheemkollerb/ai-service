@@ -1,12 +1,12 @@
-"""
-Eval qwen3:30b-a3b untuk R3 (spec tahap-2-analytics-tools.md § 7).
+﻿"""
+Eval qwen3:30b-a3b untuk R3 (spec tahap-2-analytics-tools.md Â§ 7).
 
 Mengukur tiga criteria (dijalankan DI HPC bersama Ollama asli + mock
 analytics fikstur, bukan analytics live platform):
 
-  (a) presisi intent tool-call — tool & parameter tepat;
-  (b) restraint — pertanyaan non-data TIDAK memanggil tool;
-  (c) kualitas narasi — angka yang termuat berasal dari observasi tool
+  (a) presisi intent tool-call â€” tool & parameter tepat;
+  (b) restraint â€” pertanyaan non-data TIDAK memanggil tool;
+  (c) kualitas narasi â€” angka yang termuat berasal dari observasi tool
       (auto-proxy: angka fikstur muncul di jawaban) + teks lengkap
       ditampilkan untuk review manual (periode/definisi/sumber).
 
@@ -115,7 +115,7 @@ def run_case(case: dict) -> None:
     if case.get("expect_tool") is None:
         # restraint: tanpa tool sama sekali
         ok = not calls
-        note = "restasi: " + ("tanpa tool_call" if ok else f"tool terpanggil: {[c.get('name') for c in calls]}")
+        note = "restraint: " + ("tanpa tool_call" if ok else f"tool terpanggil: {[c.get('name') for c in calls]}")
         record(name, ok, note)
         return
 
@@ -137,9 +137,9 @@ def run_case(case: dict) -> None:
     ok = tool_ok and args_ok and ok_ranges and result_ok and numbers_hit
     notes = []
     if not tool_ok:
-        notes.append(f"tool: {calls[0].get('name') if calls else 'TIDAK ADA'} ≠ {case['expect_tool']}")
+        notes.append(f"tool: {calls[0].get('name') if calls else 'TIDAK ADA'} â‰  {case['expect_tool']}")
     if not args_ok:
-        notes.append(f"args: {args} ≠ {case.get('expect_args')}")
+        notes.append(f"args: {args} â‰  {case.get('expect_args')}")
     if not ok_ranges:
         notes.append(f"range args tidak sah: {args}")
     if not result_ok:
@@ -224,7 +224,7 @@ def main() -> int:
         if not upstream.get("available"):
             raise RuntimeError(f"LLM runtime tidak hidup: {upstream.get('detail')}")
 
-        print(f"eval {len(selected)} kasus, model={upstream.get('model')} — mohon tunggu (inferensi asli)")
+        print(f"eval {len(selected)} kasus, model={upstream.get('model')} â€” mohon tunggu (inferensi asli)")
         for case in selected:
             started = time.perf_counter()
             with httpx.Client(timeout=httpx.Timeout(150.0, connect=10.0)) as client:
@@ -248,7 +248,7 @@ def main() -> int:
             if proc.poll() is None:
                 proc.terminate()
 
-    header = "Eval R3 — intent / restraint / narasi-analytics"
+    header = "Eval R3 â€” intent / restraint / narasi-analytics"
     print(header)
     print("-" * len(header))
     for name, verdict, note in results:
