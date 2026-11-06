@@ -49,10 +49,19 @@ def spawn_mock() -> subprocess.Popen:
     )
 
 
-def spawn_mock_llm_script(port: int, tool_json: str, narration: str) -> subprocess.Popen:
+def spawn_mock_llm_script(
+    port: int,
+    tool_json: str,
+    narration: str,
+    chunk_mode: str | None = None,
+) -> subprocess.Popen:
     env = os.environ.copy()
     env["MOCK_LLM_TOOL"] = tool_json
     env["MOCK_LLM_NARRATION"] = narration
+    if chunk_mode:
+        env["MOCK_LLM_CHUNK_MODE"] = chunk_mode
+    else:
+        env.pop("MOCK_LLM_CHUNK_MODE", None)
     proc = subprocess.Popen(
         [PYTHON, "-m", "uvicorn", "mock_llm:app", "--host", "127.0.0.1", "--port", str(port)],
         cwd=HERE,
@@ -280,6 +289,7 @@ def run_tool_tests(
     mock_llm_script_t9: subprocess.Popen,
     mock_llm_script_t10: subprocess.Popen,
     mock_llm_script_t13: subprocess.Popen,
+    mock_llm_script_t9b: subprocess.Popen,
 ) -> None:
     base_tools_env = {
         "ANALYTICS_URL": f"http://127.0.0.1:{MOCK_ANALYTICS_PORT}",
@@ -289,6 +299,7 @@ def run_tool_tests(
     }
     spawns = [
         ("t9", 8103, "http://127.0.0.1:11997/v1", base_tools_env),
+        ("t9b", 8108, "http://127.0.0.1:11994/v1", base_tools_env),
         ("t10", 8105, "http://127.0.0.1:11995/v1", {
             "ANALYTICS_URL": f"http://127.0.0.1:{MOCK_ANALYTICS_PORT}",
             "AI_TOOLS": "get_ringkasan_stats",
@@ -351,6 +362,32 @@ def run_tool_tests(
             and last_analytics.get("path") == "/datamart/ringkasan/stats"
             and str(last_analytics.get("query", {}).get("tahun")) == "2026",
             f"status={status} types={types} result={result} last={last_analytics} narrated={narrated[:80]!r}",
+        )
+
+        # ── T9b: streaming nyata per-char — marker terbelah tetap tertangkap ──
+        status, _, frames = chat_frames(
+            "http://127.0.0.1:8108",
+            {**white, "X-Rcc-Cookie": TEST_COOKIE},
+            [{"role": "user", "content": "berapa statistik riset tahun 2026?"}],
+        )
+        types = [frame.get("type") for frame in frames]
+        call = next((f for f in frames if f.get("type") == "tool_call"), None)
+        result = next((f for f in frames if f.get("type") == "tool_result"), None)
+        narrated = "".join(
+            frame.get("text", "") for frame in frames if frame.get("type") == "delta"
+        )
+        record(
+            "T9b",
+            status == 200
+            and order_pairs_ok(frames)
+            and call is not None
+            and call.get("name") == "get_ringkasan_stats"
+            and call.get("arguments") == {"tahun": 2026}
+            and result is not None
+            and result.get("status") == "ok"
+            and narrated == "Berdasarkan data analytics platform, tahun 2026 tercatat 4321 periset aktif dan 512 kegiatan didanai."
+            and '"tool"' not in narrated,
+            f"status={status} types={types} call={call} narrated={narrated[:80]!r}",
         )
 
         # ── T10: tool di luar allowlist → denied tanpa request analytics ─────
@@ -473,6 +510,13 @@ def main() -> int:
         "Berdasarkan data analytics platform, tahun 2026 tercatat 4321 periset "
         "aktif dan 512 kegiatan didanai.",
     )
+    mock_llm_t9b = spawn_mock_llm_script(
+        11994,
+        '{"tool": "get_ringkasan_stats", "arguments": {"tahun": 2026}}',
+        "Berdasarkan data analytics platform, tahun 2026 tercatat 4321 periset "
+        "aktif dan 512 kegiatan didanai.",
+        chunk_mode="chars",
+    )
     mock_llm_t10 = spawn_mock_llm_script(
         11995,
         '{"tool": "get_keluaran_stats", "arguments": {}}',
@@ -485,7 +529,10 @@ def main() -> int:
     )
     mock_analytics_default = spawn_mock_analytics(MOCK_ANALYTICS_PORT)
     mock_analytics_hang = spawn_mock_analytics(12002, hang=True)
-    procs = (mock, mock_llm_t9, mock_llm_t10, mock_llm_t13, mock_analytics_default, mock_analytics_hang)
+    procs = (
+        mock, mock_llm_t9, mock_llm_t9b, mock_llm_t10, mock_llm_t13,
+        mock_analytics_default, mock_analytics_hang,
+    )
     try:
         if not wait_ready(f"http://127.0.0.1:{MOCK_ANALYTICS_PORT}/health"):
             raise RuntimeError("mock analytics tidak siap")
@@ -493,17 +540,19 @@ def main() -> int:
             raise RuntimeError("mock analytics hang (:12002) tidak siap")
         if not wait_ready("http://127.0.0.1:11997/v1/models"):
             raise RuntimeError("mock LLM skripted (:11997) tidak siap")
+        if not wait_ready("http://127.0.0.1:11994/v1/models"):
+            raise RuntimeError("mock LLM skripted (:11994) tidak siap")
         if not wait_ready("http://127.0.0.1:11995/v1/models"):
             raise RuntimeError("mock LLM skripted (:11995) tidak siap")
         if not wait_ready("http://127.0.0.1:11996/v1/models"):
             raise RuntimeError("mock LLM skripted (:11996) tidak siap")
         run_tests()
-        run_tool_tests(mock_llm_t9, mock_llm_t10, mock_llm_t13)
+        run_tool_tests(mock_llm_t9, mock_llm_t10, mock_llm_t13, mock_llm_t9b)
     finally:
         for proc in procs:
             if proc.poll() is None:
                 proc.terminate()
-    header = "Acceptance T1-T13 (mock LLM/analytics; altern-Alur: :11999 base + :11997/:11995/:11996 skripted)"
+    header = "Acceptance T1-T13b (mock LLM/analytics; skripted :11997/:11994/:11995/:11996)"
     print(header)
     print("-" * len(header))
     for test_id, verdict, note in results:
@@ -512,7 +561,7 @@ def main() -> int:
     if failed:
         print(f"TES GAGAL: {','.join(failed)}")
     else:
-        print("SEMUA 13 TES PASS")
+        print("SEMUA 14 TES PASS")
     return 1 if failed else 0
 
 

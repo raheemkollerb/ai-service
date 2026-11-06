@@ -58,10 +58,16 @@ async def chat(request: Request) -> StreamingResponse:
     body = await request.json()
     _last_request = body
     scripted = _scripted_output(body)
-    chunks: list[str] = (
-        [scripted] if scripted is not None else ["Halo", " dari", " mock", " LLM."]
-    )
+    if scripted is not None:
+        chunks = [scripted]
+    else:
+        chunks = ["Halo", " dari", " mock", " LLM."]
     model = body.get("model", "mock")
+
+    # MOCK_LLM_CHUNK_MODE=chars → setiap delta 1–2 char, meniru streaming
+    # nyata qwen (marker terbelah lintas delta; uji T9b sliding window).
+    if os.environ.get("MOCK_LLM_CHUNK_MODE") == "chars":
+        chunks = list("".join(chunks))
 
     async def generate():
         base = {

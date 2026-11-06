@@ -89,6 +89,11 @@ class _StreamCapture:
         self.done_event: dict | None = None
 
 
+# Ukuran window slide: pola terpanjang {"tool": ditambah variasi whitespace
+# model (spasi/tab/newline) — 64 char aman untuk praktik streaming.
+_CAPTURE_WINDOW = 64
+
+
 async def _stream_capture(
     context: list[dict[str, str]],
     model: str | None,
@@ -97,13 +102,17 @@ async def _stream_capture(
     """
     Streaming passthrough sambil menangkap marker JSON.
 
-    Bagian teks sebelum kandidat marker tetap dialirkan; teks sejak kandidat
-    {"tool": ditahan (tidak diteruskan ke klien). Bila parse berhasil,
-    marker masuk capture.calls dan sisa pass tuntas diperiksa untuk marker
-    kedua; bila parse gagal, teks ditahan dilepas sebagai delta biasa.
+    Delta yang diproduksi provider bisa sekecil satu-dua karakter, sehingga
+    kandidat `{"tool":` tidak selalu utuh dalam satu event; karenanya teks
+    ditampung window mengambang dan dipindai ulang tiap chunk. Bagian sebelum
+    kandidat marker tetap dialirkan; teks sejak kandidat ditahan (tidak
+    diteruskan ke klien). Bila parse berhasil, marker masuk capture.calls dan
+    sisa pass tuntas diperiksa untuk marker kedua; bila parse gagal, teks
+    ditahan dilepas sebagai delta biasa.
     """
     marker_open = False
-    pending = ""
+    pending = ""  # teks setelah kandidat marker terbuka
+    tail = ""     # window mengambang sebelum kandidat terdeteksi
 
     async for event in ollama_client.stream_chat_completions(context, model=model):
         event_type = event.get("type")
@@ -115,21 +124,33 @@ async def _stream_capture(
             continue
 
         incoming = event.get("text", "")
-        if not marker_open:
-            match = tool_service._MARKER_START.search(incoming)
-            if match is None:
-                yield event
-                continue
-            prefix = incoming[: match.start()]
+        if marker_open:
+            pending += incoming
+            continue
+
+        tail += incoming
+        match = tool_service._MARKER_START.search(tail)
+        if match is not None:
+            prefix = tail[: match.start()]
             if prefix:
                 yield {"type": "delta", "text": prefix}
             marker_open = True
-            pending = incoming[match.start() :]
+            pending = tail[match.start() :]
+            tail = ""
             continue
+        # Tanpa kandidat: lepas seluruh teks kecuali trailing window agar
+        # potongan kandidat yang terbelah tetap tertampung untuk chunk berikut.
+        flush_upto = max(0, len(tail) - _CAPTURE_WINDOW)
+        if flush_upto:
+            yield {"type": "delta", "text": tail[:flush_upto]}
+            tail = tail[flush_upto:]
 
-        pending += incoming
+    # Stream provider selesai — proses sisa.
+    if not marker_open:
+        if tail.strip():
+            yield {"type": "delta", "text": tail}
+        return
 
-    # Stream provider selesai — proses teks yang ditahan.
     while pending:
         candidates = tool_service.detect_marker_candidates(pending)
         usable = None
