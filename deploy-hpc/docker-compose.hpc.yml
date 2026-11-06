@@ -33,6 +33,12 @@ services:
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
       - LLM_TIMEOUT=${LLM_TIMEOUT:-120}
+      # Analytics tools Tahap 2 — kosong = mati (deny-by-default)
+      - ANALYTICS_URL=${ANALYTICS_URL:-}
+      - AI_TOOLS=${AI_TOOLS:-}
+      - TOOL_MAX_CALLS=${TOOL_MAX_CALLS:-2}
+      - TOOL_TIMEOUT=${TOOL_TIMEOUT:-15}
+      - TOOL_RESULT_MAX_CHARS=${TOOL_RESULT_MAX_CHARS:-4000}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

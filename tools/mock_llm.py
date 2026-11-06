@@ -1,4 +1,5 @@
 import json
+import os
 import time
 
 from fastapi import FastAPI, Request
@@ -7,6 +8,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 app = FastAPI(title="Mock LLM - OpenAI compatible (RCC tests)")
 
 _last_request: dict[str, object] = {}
+
+# Marker observasi yang sisipkan gateway saat re-invoke untuk narasi akhir.
+_OBSERVATION_TAG = "[OBSERVASI ANALYTICS"
 
 
 @app.get("/v1/models")
@@ -25,12 +29,38 @@ async def last_request() -> JSONResponse:
     return JSONResponse(_last_request)
 
 
+def _scripted_output(body: dict) -> str | None:
+    """
+    Output skripted untuk uji T9-T13 (gateway tools).
+
+    - env MOCK_LLM_TOOL  : JSON marker {"tool": ..., "arguments": {...}};
+      saat ada dan percakapan belum membawa observasi, mock mengirim marker.
+    - env MOCK_LLM_NARRATION : narasi akhir setelah observasi tiba.
+    env diacak per-request agar satu server bisa dipakai lintas uji.
+    """
+    tool_json = os.environ.get("MOCK_LLM_TOOL")
+    if not tool_json:
+        return None
+    messages = body.get("messages", [])
+    got_observation = any(
+        _OBSERVATION_TAG in str(message.get("content", ""))
+        for message in messages
+        if isinstance(message, dict)
+    )
+    if got_observation:
+        return os.environ.get("MOCK_LLM_NARRATION") or "Halo dari mock LLM."
+    return tool_json
+
+
 @app.post("/v1/chat/completions")
 async def chat(request: Request) -> StreamingResponse:
     global _last_request
     body = await request.json()
     _last_request = body
-    chunks = ["Halo", " dari", " mock", " LLM."]
+    scripted = _scripted_output(body)
+    chunks: list[str] = (
+        [scripted] if scripted is not None else ["Halo", " dari", " mock", " LLM."]
+    )
     model = body.get("model", "mock")
 
     async def generate():

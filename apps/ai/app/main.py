@@ -11,6 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import chat
 from app.core.config import get_settings
+from app.core.tools_catalog import parse_allowed_tools
+from app.providers import analytics_client
+from app.providers.analytics_client import AnalyticsConfigError
 from app.providers.ollama_client import close_client
 from app.models import HealthResponse
 
@@ -19,8 +22,13 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Fail-fast (§ 8.4): konfigurasi tools aktif tanpa ANALYTICS_URL internal
+    # sah → gateway menolak menyala, bukan gagal mendadak saat tool dipanggil.
+    if parse_allowed_tools(settings.ai_tools):
+        analytics_client.validate_analytics_url(settings.analytics_url)
     yield
     await close_client()
+    await analytics_client.close_client()
 
 
 app = FastAPI(

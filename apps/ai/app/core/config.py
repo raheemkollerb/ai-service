@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     # CORS (origin BFF yang boleh memanggil)
     cors_origins: str = "http://localhost:3000,http://localhost:8080"
 
+    # Analytics tools (Tahap 2 — katalog § 3 & guardrail § 5, spec tahap-2-analytics-tools.md)
+    # HTTP(s) http://<IP-platform>:8000 di server platform; wajib saat tools aktif
+    analytics_url: str = ""
+    # Allowlist nama tool, CSV; kosong = fitur tools mati total (deny-by-default)
+    ai_tools: str = ""
+    # Guardrail loop tool
+    tool_max_calls: int = 2          # maksimum tool per prompt
+    tool_timeout: float = 15.0       # detik per request analytics
+    tool_result_max_chars: int = 4000  # batas observasi per tool masuk konteks model
+
     class Config:
         env_file = ".env"
         case_sensitive = False
