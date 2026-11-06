@@ -10,7 +10,18 @@ param(
     #   11434 (Ollama)  -> dikunci ke subnet NAT Docker/WSL (tidak terlihat LAN)
     #   8100  (gateway) -> buat/perketat rule "RCC AI Gateway (:8100)"
     #                      ke IP platform + (opsional) subnet LAN.
-    [switch]$HpcGateway
+    [switch]$HpcGateway,
+
+    # Mode platform (dijalankan DI server platform): izinkan inbound TCP 8000
+    # (analytics) HANYA dari IP HPC (+ IP tambahan opsional, mis. subnet admin)
+    # — spec tahap-2-analytics-tools.md § 6.1.
+    [switch]$AnalyticsPlatform,
+
+    # IP HPC untuk mode -AnalyticsPlatform (contoh 10.5.15.60).
+    [string]$HpcIP,
+
+    # CSV IP tambahan untuk mode -AnalyticsPlatform (subnet admin, dsb).
+    [string]$AlsoAllow
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,6 +40,9 @@ if (-not (Test-Administrator)) {
     if ($PlatformIP) { $args += @('-PlatformIP', $PlatformIP) }
     if ($KeepLanSubnet) { $args += '-KeepLanSubnet' }
     if ($HpcGateway) { $args += '-HpcGateway' }
+    if ($AnalyticsPlatform) { $args += '-AnalyticsPlatform' }
+    if ($HpcIP) { $args += @('-HpcIP', $HpcIP) }
+    if ($AlsoAllow) { $args += @('-AlsoAllow', $AlsoAllow) }
     Start-Process -FilePath 'powershell.exe' -ArgumentList $args -Verb RunAs -Wait
     exit 0
 }
@@ -105,6 +119,24 @@ if ($HpcGateway) {
     elseif ($PlatformIP) {
         Write-Host 'CATATAN tahap 2: 8100 terkunci hanya untuk IP platform.'
     }
+    exit 0
+}
+
+if ($AnalyticsPlatform) {
+    if (-not $HpcIP) {
+        Write-Host 'Perlu -HpcIP <IP-HPC> (contoh: -HpcIP 10.5.15.60).'
+        exit 1
+    }
+    Write-Host '=== Mode platform - analytics :8000 hanya dari IP HPC ==='
+    $remote = @($HpcIP)
+    if ($AlsoAllow) {
+        $extra = $AlsoAllow.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        $remote += $extra
+    }
+    Set-FirewallRule -Name 'RCC Analytics (:8000) dari HPC' -RemoteIps $remote -LocalPort 8000
+    Write-Host 'CATATAN: port 8000 sudah dipublikasikan compose (8000:8000); rule ini mempersempit sumber.'
+    Write-Host 'Mesin LAN lain tidak boleh menembus langsung (spec tahap-2-analytics-tools.md § 6.1).'
+    Write-Host 'CATATAN: IP HPC via DHCP - bila berubah, jalankan ulang dengan -HpcIP IP-baru.'
     exit 0
 }
 
